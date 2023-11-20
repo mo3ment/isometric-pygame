@@ -1,16 +1,18 @@
 import pygame, sys
+import numpy as np
 from pygame.locals import *
 
 
 #=====================================================
-#===================== FUNCTIONS =====================
+#==================== FUNCTIONS ======================
 #=====================================================
 
+UPSCALE = 2
+
 COLLISION_TILE = 9
-FPS = 60
-MAP_RATE = 20
-PLAYER_AXIS_RATE = FPS/MAP_RATE
-PLAYER_DIAG_RATE = PLAYER_AXIS_RATE/3
+FPS = 40
+MAP_RATE = 7
+#PLAYER_AXIS_RATE = 3
 WHITE = (255,255,255)
 BLACK = (0,0,0)
 RED = (255,0,0)
@@ -23,8 +25,8 @@ RED = (255,0,0)
 pygame.init()
 game_clock = pygame.time.Clock()
 pygame.display.set_caption('LIBERATION')
-screen = pygame.display.set_mode((900, 900),0,32)
-display = pygame.Surface((300, 300))
+screen = pygame.display.set_mode((960, 720),0,32)
+display = pygame.Surface((400, 300))
 
 
 #=====================================================
@@ -37,40 +39,106 @@ def collision_test(rect,tiles):
     for tile in tiles:
         if rect.colliderect(tile):
             collisions.append(tile)
+            return collisions
     return collisions
  
-def move(rect,movement,tiles):
-    rect.x += movement[0]
-    collisions = collision_test(rect,tiles)
+def check_collision_x(map_rect,iso_rect,tiles,left,right,up,down):
+    corner_case = False
+    
+    if (up and left) or (up and right):
+        corner_case = True
+        map_rect.x -= 1*up
+        iso_rect.x -= 2*up
+        iso_rect.y -= 1*up
+
+    elif (left and down) or (right and down):
+        corner_case = True
+        map_rect.x += 1*down
+        iso_rect.x += 2*down
+        iso_rect.y += 1*down
+
+    else:
+        map_rect.x -= 2*(up - down)
+        iso_rect.x -= 4*(up - down)
+        iso_rect.y -= 2*(up - down)
+    collisions = collision_test(map_rect,tiles)
+
     for tile in collisions:
-        if movement[0] > 0:
-            rect.right = tile.left
-        if movement[0] < 0:
-            rect.left = tile.right
+        if down:
+            if corner_case:
+                map_rect.x -= 1
+                iso_rect.x -= 2
+                iso_rect.y -= 1 
+            else:
+                map_rect.x -= 2
+                iso_rect.x -= 4
+                iso_rect.y -= 2
+        elif up:
+            if corner_case:
+                map_rect.x += 1
+                iso_rect.x += 2
+                iso_rect.y += 1 
+            else:
+                map_rect.x += 2
+                iso_rect.x += 4
+                iso_rect.y += 2
+    return map_rect, iso_rect
 
-    rect.y += movement[1]
-    collisions = collision_test(rect,tiles)
+def check_collision_y(map_rect,iso_rect,tiles,left,right,up,down):
+    corner_case = False
+
+    if (left and up) or (right and up) or (left and down) or (right and down):
+        corner_case = True
+        map_rect.y -= 1*(right - left)
+        iso_rect.x += 2*(right - left)
+        iso_rect.y -= 1*(right - left)
+
+    else:
+        map_rect.y -= 2*(right - left)
+        iso_rect.x += 4*(right - left)
+        iso_rect.y -= 2*(right - left)
+    collisions = collision_test(map_rect,tiles)
+
     for tile in collisions:
-        if movement[1] > 0:
-            rect.bottom = tile.top
-        if movement[1] < 0:
-            rect.top = tile.bottom
-
-    return rect
-
+        if left:
+            if corner_case:
+                map_rect.y -= 1
+                iso_rect.x += 2
+                iso_rect.y -= 1
+            else:
+                map_rect.y -= 2
+                iso_rect.x += 4
+                iso_rect.y -= 2
+        elif right:
+            if corner_case:
+                map_rect.y += 1
+                iso_rect.x -= 2
+                iso_rect.y += 1
+            else:
+                map_rect.y += 2
+                iso_rect.x -= 4
+                iso_rect.y += 2
+    return map_rect, iso_rect
 
 #=====================================================
-#================== INSTANTIATIONS ===================
+#==================== INITIATIONS ====================
 #=====================================================
-
 
 f = open('map.txt')
-map_data = [[int(c) for c in row] for row in f.read().split('\n')]
+map_data = np.array([[int(c) for c in row] for row in f.read().split('\n')], dtype=np.int32)
 f.close()
 
-player_rect = pygame.Rect(12*MAP_RATE,4*MAP_RATE,1*MAP_RATE,1*MAP_RATE)
+player_map_rect = pygame.Rect((12*MAP_RATE+1)*UPSCALE,(4*MAP_RATE+1)*UPSCALE,(1*MAP_RATE-2)*UPSCALE,(1*MAP_RATE-2)*UPSCALE)
 right, left, up, down = (False, False, False, False)
 
+floor_sprite = pygame.image.load('floor-tile-middle-upscaled.png')
+floor_sprite.set_colorkey(RED)
+
+player_shadow_sprite = pygame.image.load('player-shadow-upscaled.png')
+player_shadow_sprite.set_colorkey(RED)
+player_shadow_rect = pygame.Rect((player_map_rect.x/MAP_RATE-player_map_rect.y/MAP_RATE)*(16-2)+7*UPSCALE-1, (player_map_rect.y/MAP_RATE+player_map_rect.x/MAP_RATE)*(8-1)+1*UPSCALE,player_shadow_sprite.get_width(),player_shadow_sprite.get_height())
+
+true_camera = [0,0]
 
 #=====================================================
 #==================== GAME-LOOP ======================
@@ -79,51 +147,53 @@ right, left, up, down = (False, False, False, False)
 while True:
     # clear display #
     boundary_tiles = []
-    screen.fill(BLACK)
+    display.fill(WHITE)
+
+    true_camera[0] += (player_shadow_rect.centerx-true_camera[0]-100*UPSCALE)/10
+    true_camera[1] += (player_shadow_rect.centery-true_camera[1]-75*UPSCALE)/10
+    camera = true_camera.copy()
+    camera[0] = int(camera[0])
+    camera[1] = int(camera[1])
 
     for y_pos, row in enumerate(map_data):
         for x_pos, tile in enumerate(row):
             if tile:
                 if tile == COLLISION_TILE:
-                    boundary_tiles.append(pygame.Rect(x_pos*MAP_RATE, y_pos*MAP_RATE, 1*MAP_RATE, 1*MAP_RATE))
-                    pygame.draw.rect(screen, RED, boundary_tiles[-1])
-
+                    boundary_tiles.append(pygame.Rect(x_pos*MAP_RATE*UPSCALE, y_pos*MAP_RATE*UPSCALE, 1*MAP_RATE*UPSCALE, 1*MAP_RATE*UPSCALE))
+                    #pygame.draw.rect(display, RED, boundary_tiles[-1])
+                if tile == 1:
+                    display.blit(floor_sprite, ((x_pos-y_pos)*(16-2)*UPSCALE-camera[0], (y_pos+x_pos)*(8-1)*UPSCALE-camera[1]))
 
 #=====================================================
 #================= PLAYER-MOVEMENT ===================
 #=====================================================
 
-    player_movement = [0,0]
-    if left == True and up == True:
-        player_movement[0] += PLAYER_DIAG_RATE
-        player_movement[1] += PLAYER_DIAG_RATE
-    elif right == True and up == True:
-        player_movement[0] -= PLAYER_DIAG_RATE
-        player_movement[1] += PLAYER_DIAG_RATE
-    elif left == True and down == True:
-        player_movement[0] += PLAYER_DIAG_RATE
-        player_movement[1] -= PLAYER_DIAG_RATE
-    elif right == True and down == True:
-        player_movement[0] -= PLAYER_DIAG_RATE
-        player_movement[1] -= PLAYER_DIAG_RATE
+    player_velocity = np.array([0,0], dtype=np.int8)
+
     if right == True:
-        player_movement[0] += PLAYER_AXIS_RATE
+        player_map_rect, player_shadow_rect = check_collision_y(player_map_rect,player_shadow_rect,boundary_tiles,left,right,up,down)
     if left == True:
-        player_movement[0] -= PLAYER_AXIS_RATE
+        player_map_rect, player_shadow_rect = check_collision_y(player_map_rect,player_shadow_rect,boundary_tiles,left,right,up,down)
     if up == True:
-        player_movement[1] -= PLAYER_AXIS_RATE
+        player_map_rect, player_shadow_rect = check_collision_x(player_map_rect,player_shadow_rect,boundary_tiles,left,right,up,down)
     if down == True:
-        player_movement[1] += PLAYER_AXIS_RATE
- 
-    player = move(player_rect,player_movement,boundary_tiles)
-    pygame.draw.rect(screen, WHITE, player)
+        player_map_rect, player_shadow_rect = check_collision_x(player_map_rect,player_shadow_rect,boundary_tiles,left,right,up,down)
+        
+
     
+    #pygame.draw.rect(display,WHITE,player_map_rect)
+    #pygame.draw.rect(display,RED,player_shadow_rect)
+    display.blit(player_shadow_sprite, (player_shadow_rect.x-camera[0],player_shadow_rect.y-camera[1]))
+
     # event handling #
     for event in pygame.event.get():
         if event.type == QUIT:
             pygame.quit()
             sys.exit()
         if event.type == KEYDOWN:
+            if event.key == K_ESCAPE:
+                pygame.quit()
+                sys.exit()
             if event.key == K_RIGHT:
                 right = True
             if event.key == K_LEFT:
@@ -143,5 +213,6 @@ while True:
                 up = False
     
     # update display #
+    screen.blit(pygame.transform.scale(display, screen.get_size()), (0, 0))
     pygame.display.update()
     game_clock.tick(FPS)
